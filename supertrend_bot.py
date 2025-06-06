@@ -178,4 +178,4 @@ for entry in log_messages[:30]:
     st.text(entry)
 
 st.markdown("---")
-st.markdown("*Note: This demo does not place real orders. You can integrate BingX API for live trading.*"
+st.markdown("*Note: This demo does not place real orders. You can integrate BingX API for live trading.*")
