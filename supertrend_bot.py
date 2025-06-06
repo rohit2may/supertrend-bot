@@ -12,7 +12,7 @@ INTERVAL = "1m"
 TRADE_AMOUNT_USDT = 10
 LEVERAGE = 10
 API_URL = "https://open-api.bingx.com"
-API_KEY = st.text_input("API Key", type="password"
+API_KEY = st.text_input("API Key", type="password")
 SECRET_KEY = st.text_input("Secret Key", type="password")
 
 # === STATE ===
