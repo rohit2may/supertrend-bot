@@ -1,9 +1,7 @@
 import streamlit as st
 
-# ✅ Page config — this must be FIRST and ONLY call
 st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 
-# ⬇️ Now all other imports and code
 import pandas as pd
 import requests
 import time
@@ -11,7 +9,12 @@ from datetime import datetime, timedelta
 import hmac
 from hashlib import sha256
 
-# Streamlit inputs must come AFTER set_page_config
+# === CONFIG VARIABLES ===
+SYMBOL = "ethusdt"
+INTERVAL = "1m"
+TRADE_AMOUNT_USDT = 10
+LEVERAGE = 10
+
 API_KEY = st.text_input("API Key", type="password")
 SECRET_KEY = st.text_input("Secret Key", type="password")
 
