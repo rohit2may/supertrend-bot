@@ -1,195 +1,157 @@
 import time
 import requests
-import hmac
-from hashlib import sha256
 import pandas as pd
 
+# --- CONFIG ---
 APIURL = "https://open-api.bingx.com"
-APIKEY = ""  # Add your API key
-SECRETKEY = ""  # Add your secret key
-
-SYMBOL = "ONDO-USDT"  # Correct BingX symbol format, confirm on BingX API docs
-INTERVAL = "3m"  # 3-minute candles
+APIKEY = ""
+SECRETKEY = ""
+SYMBOL = "ONDOUSDT"     # Note: no dash, as required by API
+INTERVAL = "3m"
 QUANTITY = 1
 
 ST1_LEN, ST1_MUL = 14, 2
 ST2_LEN, ST2_MUL = 21, 1
 
-TRADE_ACTIVE = False
-TRADE_SIDE = None
-STOP_LOSS = None
-
-def get_sign(api_secret, payload):
-    return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), digestmod=sha256).hexdigest()
-
-def parse_param(paramsMap):
-    sortedKeys = sorted(paramsMap)
-    paramsStr = "&".join(f"{k}={paramsMap[k]}" for k in sortedKeys)
-    if paramsStr != "":
-        return paramsStr + "&timestamp=" + str(int(time.time() * 1000))
-    else:
-        return paramsStr + "timestamp=" + str(int(time.time() * 1000))
-
-def send_request(method, path, paramsMap):
-    paramsStr = parse_param(paramsMap)
-    signature = get_sign(SECRETKEY, paramsStr)
-    url = f"{APIURL}{path}?{paramsStr}&signature={signature}"
-    headers = {'X-BX-APIKEY': APIKEY}
-    response = requests.request(method, url, headers=headers)
-    return response.json()
-
+# --- FETCH KLINES FROM PUBLIC MARKET API (no API key/signature required) ---
 def fetch_klines(symbol, interval, limit=500):
-    path = "/openApi/swap/v3/quote/klines"
+    url = "https://api.bingx.com/api/v1/market/kline"
     params = {
         "symbol": symbol,
         "interval": interval,
-        "limit": str(limit),
+        "limit": str(limit)
     }
-    res = send_request("GET", path, params)
-    # print("Raw Klines response:", res)  # Debug print
-    
+    response = requests.get(url, params=params)
+    res = response.json()
     if 'data' not in res:
         print("Error fetching klines:", res)
         return None
-    
-    klines = res['data']  # List of lists
-    
-    # BingX returns kline arrays - assign columns as per API docs:
-    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume',
-               'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore']
-    
+    klines = res['data']
+    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover']
     df = pd.DataFrame(klines, columns=columns)
-    
-    # Convert columns to proper dtypes:
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        df[col] = df[col].astype(float)
     df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-    df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
-    
+    for col in ['open', 'high', 'low', 'close', 'volume', 'turnover']:
+        df[col] = df[col].astype(float)
     return df
 
+# --- CALCULATE SUPER TREND ---
 def calculate_supertrend(df, length, multiplier):
     hl2 = (df['high'] + df['low']) / 2
     atr = df['high'].rolling(length).max() - df['low'].rolling(length).min()
-    atr = atr.ewm(alpha=1/length, adjust=False).mean()
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
-    
-    supertrend = [True] * len(df)  # True means bullish, False bearish
-    final_upperband = [0] * len(df)
-    final_lowerband = [0] * len(df)
-    
+    atr = atr.rolling(length).mean()
+    # True ATR calculation (classic)
+    tr1 = df['high'] - df['low']
+    tr2 = abs(df['high'] - df['close'].shift(1))
+    tr3 = abs(df['low'] - df['close'].shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(length).mean()
+
+    basic_upperband = hl2 + (multiplier * atr)
+    basic_lowerband = hl2 - (multiplier * atr)
+
+    final_upperband = basic_upperband.copy()
+    final_lowerband = basic_lowerband.copy()
+
     for i in range(1, len(df)):
-        final_upperband[i] = upperband[i] if (upperband[i] < final_upperband[i-1] or df['close'][i-1] > final_upperband[i-1]) else final_upperband[i-1]
-        final_lowerband[i] = lowerband[i] if (lowerband[i] > final_lowerband[i-1] or df['close'][i-1] < final_lowerband[i-1]) else final_lowerband[i-1]
-        
-        if df['close'][i] > final_upperband[i-1]:
-            supertrend[i] = True
-        elif df['close'][i] < final_lowerband[i-1]:
-            supertrend[i] = False
+        if (basic_upperband[i] < final_upperband[i-1]) or (df['close'][i-1] > final_upperband[i-1]):
+            final_upperband[i] = basic_upperband[i]
         else:
-            supertrend[i] = supertrend[i-1]
-    
-    df['supertrend'] = supertrend
-    df['final_upperband'] = final_upperband
-    df['final_lowerband'] = final_lowerband
-    
+            final_upperband[i] = final_upperband[i-1]
+
+        if (basic_lowerband[i] > final_lowerband[i-1]) or (df['close'][i-1] < final_lowerband[i-1]):
+            final_lowerband[i] = basic_lowerband[i]
+        else:
+            final_lowerband[i] = final_lowerband[i-1]
+
+    supertrend = [True]  # True = uptrend, False = downtrend
+
+    for i in range(1, len(df)):
+        if (df['close'][i] > final_upperband[i-1]):
+            supertrend.append(True)
+        elif (df['close'][i] < final_lowerband[i-1]):
+            supertrend.append(False)
+        else:
+            supertrend.append(supertrend[i-1])
+
+        # Override to upper/lower bands depending on trend
+        if supertrend[i]:
+            final_upperband[i] = float('nan')
+        else:
+            final_lowerband[i] = float('nan')
+
+    df[f'ST_{length}_{multiplier}_trend'] = supertrend
+    df[f'ST_{length}_{multiplier}_upperband'] = final_upperband
+    df[f'ST_{length}_{multiplier}_lowerband'] = final_lowerband
+
     return df
 
-def place_order(side):
-    # Here, use your BingX order placement logic using their API.
-    # Example placeholder print:
-    print(f"Placing {side} order for quantity {QUANTITY} on {SYMBOL}")
-    # You should implement actual API order calls here.
-    global TRADE_ACTIVE, TRADE_SIDE
-    TRADE_ACTIVE = True
-    TRADE_SIDE = side
+# --- MOCK TRADING FUNCTIONS (Replace with real API calls) ---
+def place_order(side, quantity, symbol=SYMBOL):
+    print(f"Placing {side} order for {quantity} {symbol}")
+    # TODO: implement real API order placing here
+    return True
 
-def close_trade():
-    # Implement actual order close logic here
-    print("Manually closing trade...")
-    global TRADE_ACTIVE, TRADE_SIDE, STOP_LOSS
-    TRADE_ACTIVE = False
-    TRADE_SIDE = None
-    STOP_LOSS = None
+def close_position():
+    print("Manually closing position now!")
+    # TODO: implement real API close position call here
 
+# --- BOT LOGIC ---
 def run_bot():
-    global STOP_LOSS, TRADE_ACTIVE, TRADE_SIDE
-    
+    position = None  # 'LONG' or 'SHORT' or None
+    stop_loss = None
+
     while True:
-        df = fetch_klines(SYMBOL, INTERVAL)
+        df = fetch_klines(SYMBOL, INTERVAL, limit=100)
         if df is None:
-            print("Failed to fetch data, retrying...")
-            time.sleep(5)
+            time.sleep(10)
             continue
-        
-        df_st1 = calculate_supertrend(df.copy(), ST1_LEN, ST1_MUL)
-        df_st2 = calculate_supertrend(df.copy(), ST2_LEN, ST2_MUL)
-        
-        last = len(df) - 1
-        
-        st1_signal = df_st1['supertrend'].iloc[last]
-        st2_signal = df_st2['supertrend'].iloc[last]
-        
-        print(f"ST1 Signal: {'LONG' if st1_signal else 'SHORT'}, ST2 Signal: {'LONG' if st2_signal else 'SHORT'}")
-        
-        # Trade only if both Supertrends agree
-        if st1_signal == st2_signal:
-            signal = "LONG" if st1_signal else "SHORT"
-        else:
-            signal = None
-        
-        # Wait 1 min for reconfirmation: implement by checking signal stays same next loop
-        
-        if TRADE_ACTIVE:
-            # Check early exit conditions
-            if TRADE_SIDE == "LONG":
-                # If any supertrend flips to SHORT, close trade
-                if not st1_signal or not st2_signal:
-                    print("Early exit: Supertrend flipped against LONG, closing trade")
-                    close_trade()
-                    continue
-                
-                # Update stop loss to ST2 lower band
-                new_sl = df_st2['final_lowerband'].iloc[last]
-                if STOP_LOSS != new_sl:
-                    STOP_LOSS = new_sl
-                    print(f"Updated Stop Loss (LONG): {STOP_LOSS}")
-                
-            elif TRADE_SIDE == "SHORT":
-                # If any supertrend flips to LONG, close trade
-                if st1_signal or st2_signal:
-                    print("Early exit: Supertrend flipped against SHORT, closing trade")
-                    close_trade()
-                    continue
-                
-                # Update stop loss to ST2 upper band
-                new_sl = df_st2['final_upperband'].iloc[last]
-                if STOP_LOSS != new_sl:
-                    STOP_LOSS = new_sl
-                    print(f"Updated Stop Loss (SHORT): {STOP_LOSS}")
-        
-        else:
-            # No active trade, check if new trade entry condition met
-            if signal:
-                print(f"Signal confirmed: {signal}. Entering trade...")
-                place_order(signal)
-                # Set initial stop loss
-                if signal == "LONG":
-                    STOP_LOSS = df_st2['final_lowerband'].iloc[last]
-                else:
-                    STOP_LOSS = df_st2['final_upperband'].iloc[last]
-                print(f"Initial Stop Loss set at: {STOP_LOSS}")
+
+        # Calculate both Supertrends
+        df = calculate_supertrend(df, ST1_LEN, ST1_MUL)
+        df = calculate_supertrend(df, ST2_LEN, ST2_MUL)
+
+        # Use last candle data
+        last = df.iloc[-1]
+
+        st1_trend = last[f'ST_{ST1_LEN}_{ST1_MUL}_trend']
+        st2_trend = last[f'ST_{ST2_LEN}_{ST2_MUL}_trend']
+        st2_upper = last[f'ST_{ST2_LEN}_{ST2_MUL}_upperband']
+        st2_lower = last[f'ST_{ST2_LEN}_{ST2_MUL}_lowerband']
+
+        # Check if both ST give same signal
+        if st1_trend == st2_trend:
+            if position is None:
+                print(f"[{last['open_time']}] Signal: Entering {'LONG' if st1_trend else 'SHORT'}")
+                side = "BUY" if st1_trend else "SELL"
+                if place_order(side, QUANTITY):
+                    position = "LONG" if st1_trend else "SHORT"
+                    stop_loss = st2_lower if position == "LONG" else st2_upper
+                    print(f"Entered {position} at close={last['close']:.4f}, Stop Loss set at {stop_loss:.4f}")
             else:
-                print("No matching Supertrend signal, no trade.")
-        
-        # Manual close option input (non-blocking workaround)
-        # You can use threading or signal or external trigger. For simplicity:
-        user_input = input("Type 'close' to manually close trade, or just press Enter to continue: ").strip().lower()
-        if user_input == "close" and TRADE_ACTIVE:
-            close_trade()
-        
-        time.sleep(60)  # Wait 1 minute before next check
+                # Check for early exit condition: if any ST flips
+                if (position == "LONG" and (not st1_trend or not st2_trend)) or (position == "SHORT" and (st1_trend or st2_trend)):
+                    print(f"[{last['open_time']}] Early exit signal detected. Closing position.")
+                    close_position()
+                    position = None
+                    stop_loss = None
+                else:
+                    # Update stop loss dynamically
+                    new_stop_loss = st2_lower if position == "LONG" else st2_upper
+                    if new_stop_loss != stop_loss:
+                        print(f"Updating Stop Loss from {stop_loss:.4f} to {new_stop_loss:.4f}")
+                        stop_loss = new_stop_loss
+
+        else:
+            print(f"[{last['open_time']}] Supertrend mismatch, no trade action.")
+
+        print(f"Current Position: {position}, Stop Loss: {stop_loss}")
+        print("-" * 50)
+
+        # Manual close check
+        # You can implement a manual close trigger, e.g. keyboard input, file flag, API call, etc.
+        # For simplicity here, just sleep and continue
+        time.sleep(180)  # Sleep for 3 minutes (candle duration)
+
 
 if __name__ == "__main__":
     run_bot()
