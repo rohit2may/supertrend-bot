@@ -3,12 +3,17 @@ import pandas as pd
 import requests
 import time
 from datetime import datetime, timedelta
+import hmac
+from hashlib import sha256
 
 # === CONFIG ===
 SYMBOL = "ETH-USDT"
 INTERVAL = "1m"
 TRADE_AMOUNT_USDT = 10
 LEVERAGE = 10
+API_URL = "https://open-api.bingx.com"
+API_KEY = st.secrets["api_key"]
+SECRET_KEY = st.secrets["secret_key"]
 
 # === STATE ===
 current_position = None
@@ -19,20 +24,43 @@ waiting_side = None
 log_messages = []
 
 # === UTILS ===
+def parse_params(params):
+    sorted_keys = sorted(params)
+    base = "&".join(f"{key}={params[key]}" for key in sorted_keys)
+    timestamp = f"timestamp={int(time.time() * 1000)}"
+    return f"{base}&{timestamp}" if base else timestamp
+
+def get_sign(secret_key, payload_str):
+    return hmac.new(secret_key.encode("utf-8"), payload_str.encode("utf-8"), sha256).hexdigest()
+
 def get_klines(symbol, interval, limit=100):
-    url = "https://open-api.bingx.com/openApi/market/getKlines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    res = requests.get(url, params=params).json()
-
-    if "data" not in res:
-        log(f"⚠️ API Error: {res}")
+    path = "/openApi/market/getKlines"
+    method = "GET"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
+    query_string = parse_params(params)
+    signature = get_sign(SECRET_KEY, query_string)
+    url = f"{API_URL}{path}?{query_string}&signature={signature}"
+    headers = {
+        "X-BX-APIKEY": API_KEY
+    }
+    res = requests.get(url, headers=headers)
+    try:
+        res_json = res.json()
+        if 'data' not in res_json:
+            log(f"⚠️ API Error: {res_json}")
+            return None
+        df = pd.DataFrame(res_json['data'])
+        df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
+        return df
+    except Exception as e:
+        log(f"⚠️ No data returned from API. Skipping strategy run.")
         return None
-
-    df = pd.DataFrame(res["data"])
-    df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
-    return df
 
 def compute_supertrend(df, length, multiplier):
     hl2 = (df['high'] + df['low']) / 2
@@ -73,10 +101,8 @@ def log(msg):
 
 def get_latest_signals():
     df = get_klines(SYMBOL, INTERVAL)
-    if df is None or df.empty:
-        log("⚠️ No data returned from API. Skipping strategy run.")
-        return pd.DataFrame()
-
+    if df is None:
+        return None
     st1 = compute_supertrend(df, 14, 2)
     st2 = compute_supertrend(df, 21, 1)
 
@@ -106,11 +132,10 @@ def strategy():
     global current_position, wait_confirm_time, waiting_side, stop_loss
 
     df = get_latest_signals()
-    if df.empty:
+    if df is None:
         return
 
     latest = df.iloc[-1]
-
     st1_sig = latest['st1_signal']
     st2_sig = latest['st2_signal']
     price = latest['close']
