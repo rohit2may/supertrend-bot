@@ -178,9 +178,6 @@ def strategy():
 # === STREAMLIT APP ===
 st.title("📈 Supertrend BingX Trading Bot")
 
-API_KEY = st.text_input("API Key", type="password")
-SECRET_KEY = st.text_input("Secret Key", type="password")
-
 if st.button("Run Strategy Once"):
     strategy()
 
