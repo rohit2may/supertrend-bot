@@ -24,11 +24,11 @@ def get_klines(symbol, interval, limit=100):
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     res = requests.get(url, params=params).json()
 
-    if 'data' not in res:
+    if "data" not in res:
         log(f"⚠️ API Error: {res}")
         return None
 
-    df = pd.DataFrame(res['data'])
+    df = pd.DataFrame(res["data"])
     df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
@@ -73,9 +73,9 @@ def log(msg):
 
 def get_latest_signals():
     df = get_klines(SYMBOL, INTERVAL)
-    if df is None:
+    if df is None or df.empty:
         log("⚠️ No data returned from API. Skipping strategy run.")
-        return None
+        return pd.DataFrame()
 
     st1 = compute_supertrend(df, 14, 2)
     st2 = compute_supertrend(df, 21, 1)
@@ -106,7 +106,7 @@ def strategy():
     global current_position, wait_confirm_time, waiting_side, stop_loss
 
     df = get_latest_signals()
-    if df is None:
+    if df.empty:
         return
 
     latest = df.iloc[-1]
