@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -22,12 +23,21 @@ log_messages = []
 def get_klines(symbol, interval, limit=100):
     url = f"https://open-api.bingx.com/openApi/swap/v2/market/kline"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    res = requests.get(url, params=params).json()
-    df = pd.DataFrame(res['data'])
-    df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
-    return df
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        json_data = res.json()
+        if 'data' not in json_data:
+            log(f"⚠️ API Error: {json_data}")
+            return pd.DataFrame()
+        df = pd.DataFrame(json_data['data'])
+        df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
+        return df
+    except Exception as e:
+        log(f"❌ API Fetch Error: {e}")
+        return pd.DataFrame()
 
 def compute_supertrend(df, length, multiplier):
     hl2 = (df['high'] + df['low']) / 2
@@ -68,9 +78,11 @@ def log(msg):
 
 def get_latest_signals():
     df = get_klines(SYMBOL, INTERVAL)
+    if df.empty:
+        return pd.DataFrame()
     st1 = compute_supertrend(df, 14, 2)
     st2 = compute_supertrend(df, 21, 1)
-    
+
     df['st1_signal'] = st1['trend']
     df['st1_lb'] = st1['lowerband']
     df['st1_ub'] = st1['upperband']
@@ -95,8 +107,11 @@ def close_trade(price):
 
 def strategy():
     global current_position, wait_confirm_time, waiting_side, stop_loss
-
     df = get_latest_signals()
+    if df.empty:
+        log("⚠️ No data returned from API. Skipping strategy run.")
+        return
+
     latest = df.iloc[-1]
 
     st1_sig = latest['st1_signal']
