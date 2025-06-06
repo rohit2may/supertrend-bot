@@ -1,13 +1,8 @@
 import streamlit as st
-
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
-
 import pandas as pd
 import requests
 import time
 from datetime import datetime, timedelta
-import hmac
-from hashlib import sha256
 
 # === CONFIG VARIABLES ===
 SYMBOL = "ethusdt"
@@ -15,32 +10,31 @@ INTERVAL = "1m"
 TRADE_AMOUNT_USDT = 10
 LEVERAGE = 10
 
+# === INIT SESSION STATE ===
+if 'current_position' not in st.session_state:
+    st.session_state.current_position = None
+if 'entry_price' not in st.session_state:
+    st.session_state.entry_price = None
+if 'stop_loss' not in st.session_state:
+    st.session_state.stop_loss = None
+if 'wait_confirm_time' not in st.session_state:
+    st.session_state.wait_confirm_time = None
+if 'waiting_side' not in st.session_state:
+    st.session_state.waiting_side = None
+if 'log_messages' not in st.session_state:
+    st.session_state.log_messages = []
+
+# === API KEYS INPUT ===
 API_KEY = st.text_input("API Key", type="password")
 SECRET_KEY = st.text_input("Secret Key", type="password")
 
-# === STATE ===
-current_position = None
-entry_price = None
-stop_loss = None
-wait_confirm_time = None
-waiting_side = None
-log_messages = []
-
 # === UTILS ===
-def parse_params(params):
-    sorted_keys = sorted(params)
-    base = "&".join(f"{key}={params[key]}" for key in sorted_keys)
-    timestamp = f"timestamp={int(time.time() * 1000)}"
-    return f"{base}&{timestamp}" if base else timestamp
-
 def log(msg):
-    global log_messages
     timestamp = datetime.now().strftime('%H:%M:%S')
     full_msg = f"[{timestamp}] {msg}"
-    log_messages.insert(0, full_msg)
+    st.session_state.log_messages.insert(0, full_msg)
 
 def get_klines(symbol, interval, limit=100):
-    # No signature required for public market data
     url = f"https://api-swap-rest.bingx.com/api/v1/market/kline"
     params = {
         "symbol": symbol.upper(),
@@ -58,8 +52,8 @@ def get_klines(symbol, interval, limit=100):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
         return df
-    except Exception as e:
-        log(f"⚠️ No data returned from API. Skipping strategy run.")
+    except Exception:
+        log("⚠️ No data returned from API. Skipping strategy run.")
         return None
 
 def compute_supertrend(df, length, multiplier):
@@ -112,22 +106,23 @@ def get_latest_signals():
     return df
 
 def enter_trade(side, price, sl):
-    global current_position, entry_price, stop_loss
-    current_position = side
-    entry_price = price
-    stop_loss = sl
+    st.session_state.current_position = side
+    st.session_state.entry_price = price
+    st.session_state.stop_loss = sl
     log(f"🟢 ENTER {side} @ {price:.2f}, SL: {sl:.2f}")
 
 def close_trade(price):
-    global current_position, entry_price
-    if current_position:
-        profit = (price - entry_price) if current_position == 'LONG' else (entry_price - price)
-        log(f"🔴 EXIT {current_position} @ {price:.2f} | PnL: {profit:.2f} USDT")
-    current_position = None
+    if st.session_state.current_position:
+        if st.session_state.current_position == 'LONG':
+            profit = price - st.session_state.entry_price
+        else:
+            profit = st.session_state.entry_price - price
+        log(f"🔴 EXIT {st.session_state.current_position} @ {price:.2f} | PnL: {profit:.2f} USDT")
+    st.session_state.current_position = None
+    st.session_state.entry_price = None
+    st.session_state.stop_loss = None
 
 def strategy():
-    global current_position, wait_confirm_time, waiting_side, stop_loss
-
     df = get_latest_signals()
     if df is None:
         return
@@ -137,24 +132,31 @@ def strategy():
     st2_sig = latest['st2_signal']
     price = latest['close']
 
+    current_position = st.session_state.current_position
+    stop_loss = st.session_state.stop_loss
+    wait_confirm_time = st.session_state.wait_confirm_time
+    waiting_side = st.session_state.waiting_side
+
     if current_position:
-        if price <= stop_loss and current_position == 'LONG':
+        if current_position == 'LONG' and price <= stop_loss:
             log(f"❌ SL hit on LONG @ {price:.2f}")
             close_trade(price)
-        elif price >= stop_loss and current_position == 'SHORT':
+            return
+        if current_position == 'SHORT' and price >= stop_loss:
             log(f"❌ SL hit on SHORT @ {price:.2f}")
             close_trade(price)
-        elif (st1_sig != current_position or st2_sig != current_position):
+            return
+        if st1_sig != current_position or st2_sig != current_position:
             log(f"⚠️ Signal flip detected — closing {current_position}")
             close_trade(price)
-        return
+            return
 
     now = datetime.now()
 
-    if not wait_confirm_time and st1_sig == st2_sig:
-        wait_confirm_time = now + timedelta(minutes=1)
-        waiting_side = st1_sig
-        log(f"⏳ Signal match: {waiting_side} — waiting 1 min confirmation...")
+    if wait_confirm_time is None and st1_sig == st2_sig:
+        st.session_state.wait_confirm_time = now + timedelta(minutes=1)
+        st.session_state.waiting_side = st1_sig
+        log(f"⏳ Signal match: {st1_sig} — waiting 1 min confirmation...")
         return
 
     if wait_confirm_time and now >= wait_confirm_time:
@@ -167,17 +169,21 @@ def strategy():
                 enter_trade('SHORT', price, sl)
         else:
             log(f"❌ Signal mismatch after 1 min — skipping trade")
-        wait_confirm_time = None
-        waiting_side = None
+        st.session_state.wait_confirm_time = None
+        st.session_state.waiting_side = None
 
-# === STREAMLIT DASHBOARD ===
+# === STREAMLIT APP ===
+st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 st.title("📈 Supertrend BingX Trading Bot")
+
+API_KEY = st.text_input("API Key", type="password")
+SECRET_KEY = st.text_input("Secret Key", type="password")
 
 if st.button("Run Strategy Once"):
     strategy()
 
 st.markdown("### Live Log")
-for entry in log_messages[:30]:
+for entry in st.session_state.log_messages[:30]:
     st.text(entry)
 
 st.markdown("---")
