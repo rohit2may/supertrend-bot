@@ -40,15 +40,21 @@ def signed_request(method, path, params=None):
     return response.json()
 
 # === CANDLE FETCH ===
-def fetch_klines(symbol, interval, limit=200):
-    url = f"https://open-api.bingx.com/openApi/swap/v2/quote/kline"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    res = requests.get(url, params=params).json()
-    df = pd.DataFrame(res['data'])
-    df.columns = ['timestamp','open','high','low','close','volume','turnover','confirm']
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df = df.astype({'open': float, 'high': float, 'low': float, 'close': float})
-    return df
+def fetch_klines(symbol, interval, limit=100):
+    url = f"https://open-api.bingx.com/openApi/linear/v1/market/kline?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        res = requests.get(url).json()
+        if 'data' not in res or not isinstance(res['data'], list):
+            print("Unexpected API response:", res)
+            return pd.DataFrame()  # Return empty DataFrame to avoid crash
+        df = pd.DataFrame(res['data'])
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+        df.set_index('open_time', inplace=True)
+        df = df.astype(float)
+        return df
+    except Exception as e:
+        print(f"[Error] fetch_klines() failed: {e}")
+        return pd.DataFrame()
 
 # === SUPERTREND ===
 def calculate_supertrend(df, length, multiplier):
