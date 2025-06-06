@@ -20,12 +20,14 @@ log_messages = []
 
 # === UTILS ===
 def get_klines(symbol, interval, limit=100):
-    url = f"https://open-api.bingx.com/openApi/swap/v2/market/kline"
+    url = "https://open-api.bingx.com/openApi/market/getKlines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     res = requests.get(url, params=params).json()
+
     if 'data' not in res:
         log(f"⚠️ API Error: {res}")
         return None
+
     df = pd.DataFrame(res['data'])
     df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -74,9 +76,10 @@ def get_latest_signals():
     if df is None:
         log("⚠️ No data returned from API. Skipping strategy run.")
         return None
+
     st1 = compute_supertrend(df, 14, 2)
     st2 = compute_supertrend(df, 21, 1)
-    
+
     df['st1_signal'] = st1['trend']
     df['st1_lb'] = st1['lowerband']
     df['st1_ub'] = st1['upperband']
@@ -105,6 +108,7 @@ def strategy():
     df = get_latest_signals()
     if df is None:
         return
+
     latest = df.iloc[-1]
 
     st1_sig = latest['st1_signal']
@@ -144,7 +148,7 @@ def strategy():
         wait_confirm_time = None
         waiting_side = None
 
-# === STREAMLIT UI ===
+# === STREAMLIT DASHBOARD ===
 st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 st.title("📈 Supertrend BingX Trading Bot")
 
