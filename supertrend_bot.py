@@ -12,8 +12,8 @@ INTERVAL = "1m"
 TRADE_AMOUNT_USDT = 10
 LEVERAGE = 10
 API_URL = "https://open-api.bingx.com"
-API_KEY = "v2vM7VlkudtLlLNM34xn3iCJkp0gby6FIRsun0Y2XQMuclU5QTRPCDESZxizWWZuNUwL696hRK7A5jCxq1Bqw"
-SECRET_KEY = "gLXVl29xpQbU22XTePuam3dcTHyWblpel8NkmqAkFAVO2sSQyNmWzMdpQhpxZABeGv1wZJ6nc6N0mKnmwUA"
+API_KEY = st.text_input("API Key", type="password"
+SECRET_KEY = st.text_input("Secret Key", type="password")
 
 # === STATE ===
 current_position = None
