@@ -176,7 +176,6 @@ def strategy():
         st.session_state.waiting_side = None
 
 # === STREAMLIT APP ===
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 st.title("📈 Supertrend BingX Trading Bot")
 
 API_KEY = st.text_input("API Key", type="password")
