@@ -1,189 +1,146 @@
-import streamlit as st
-
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
-
-import pandas as pd
-import requests
 import time
-from datetime import datetime, timedelta
+import hmac
+import hashlib
+import requests
+import pandas as pd
+from datetime import datetime
 
-# === CONFIG VARIABLES ===
-SYMBOL = "ethusdt"
-INTERVAL = "1m"
-TRADE_AMOUNT_USDT = 10
-LEVERAGE = 10
+# === CONFIG ===
+APIKEY = "YOUR_API_KEY"
+SECRETKEY = "YOUR_SECRET_KEY"
+BASE_URL = "https://open-api.bingx.com"
+SYMBOL = "ONDO-USDT"
+INTERVAL = "3m"
+QUANTITY = 1
 
-# === INIT SESSION STATE ===
-if 'current_position' not in st.session_state:
-    st.session_state.current_position = None
-if 'entry_price' not in st.session_state:
-    st.session_state.entry_price = None
-if 'stop_loss' not in st.session_state:
-    st.session_state.stop_loss = None
-if 'wait_confirm_time' not in st.session_state:
-    st.session_state.wait_confirm_time = None
-if 'waiting_side' not in st.session_state:
-    st.session_state.waiting_side = None
-if 'log_messages' not in st.session_state:
-    st.session_state.log_messages = []
+# Supertrend params
+ST1_LEN = 14
+ST1_MUL = 2
+ST2_LEN = 21
+ST2_MUL = 1
 
-# === API KEYS INPUT ===
-API_KEY = st.text_input("API Key", type="password")
-SECRET_KEY = st.text_input("Secret Key", type="password")
+# === STATE ===
+position = None  # 'LONG', 'SHORT', or None
+entry_price = None
+stop_loss = None
 
 # === UTILS ===
-def log(msg):
-    timestamp = datetime.now().strftime('%H:%M:%S')
-    full_msg = f"[{timestamp}] {msg}"
-    st.session_state.log_messages.insert(0, full_msg)
+def get_signature(secret, payload):
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
-def get_klines(symbol, interval, limit=100):
-    url = f"https://api-swap-rest.bingx.com/api/v1/market/kline"
-    params = {
-        "symbol": symbol.upper(),
-        "interval": interval,
-        "limit": limit
-    }
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        data = res.json()
-        if 'data' not in data:
-            log(f"⚠️ API Error: {data}")
-            return None
-        df = pd.DataFrame(data['data'])
-        df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
-        return df
-    except Exception:
-        log("⚠️ No data returned from API. Skipping strategy run.")
-        return None
+def signed_request(method, path, params=None):
+    if params is None:
+        params = {}
+    params['timestamp'] = int(time.time() * 1000)
+    query_string = '&'.join([f"{k}={params[k]}" for k in sorted(params)])
+    signature = get_signature(SECRETKEY, query_string)
+    url = f"{BASE_URL}{path}?{query_string}&signature={signature}"
+    headers = {"X-BX-APIKEY": APIKEY}
+    response = requests.request(method, url, headers=headers)
+    return response.json()
 
-def compute_supertrend(df, length, multiplier):
+# === CANDLE FETCH ===
+def fetch_klines(symbol, interval, limit=200):
+    url = f"https://open-api.bingx.com/openApi/swap/v2/quote/kline"
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    res = requests.get(url, params=params).json()
+    df = pd.DataFrame(res['data'])
+    df.columns = ['timestamp','open','high','low','close','volume','turnover','confirm']
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df = df.astype({'open': float, 'high': float, 'low': float, 'close': float})
+    return df
+
+# === SUPERTREND ===
+def calculate_supertrend(df, length, multiplier):
     hl2 = (df['high'] + df['low']) / 2
-    tr1 = df['high'] - df['low']
-    tr2 = abs(df['high'] - df['close'].shift())
-    tr3 = abs(df['low'] - df['close'].shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(length).mean()
-
+    atr = df['high'].combine(df['low'], max) - df['low'].combine(df['close'].shift(1), min)
+    atr = atr.rolling(length).mean()
     upperband = hl2 + (multiplier * atr)
     lowerband = hl2 - (multiplier * atr)
 
     final_upperband = upperband.copy()
     final_lowerband = lowerband.copy()
-    supertrend = [True] * len(df)
 
+    supertrend = [True] * len(df)
     for i in range(1, len(df)):
-        if df['close'][i] > final_upperband[i-1]:
+        if df['close'][i] > final_upperband[i - 1]:
             supertrend[i] = True
-        elif df['close'][i] < final_lowerband[i-1]:
+        elif df['close'][i] < final_lowerband[i - 1]:
             supertrend[i] = False
         else:
-            supertrend[i] = supertrend[i-1]
-            if supertrend[i] and final_lowerband[i] < final_lowerband[i-1]:
-                final_lowerband[i] = final_lowerband[i-1]
-            if not supertrend[i] and final_upperband[i] > final_upperband[i-1]:
-                final_upperband[i] = final_upperband[i-1]
+            supertrend[i] = supertrend[i - 1]
+            if supertrend[i] and lowerband[i] < final_lowerband[i - 1]:
+                final_lowerband[i] = final_lowerband[i - 1]
+            if not supertrend[i] and upperband[i] > final_upperband[i - 1]:
+                final_upperband[i] = final_upperband[i - 1]
 
-    trend = ['BUY' if val else 'SELL' for val in supertrend]
-    return pd.DataFrame({
-        'upperband': final_upperband,
-        'lowerband': final_lowerband,
-        'trend': trend
-    })
-
-def get_latest_signals():
-    df = get_klines(SYMBOL, INTERVAL)
-    if df is None:
-        return None
-    st1 = compute_supertrend(df, 14, 2)
-    st2 = compute_supertrend(df, 21, 1)
-
-    df['st1_signal'] = st1['trend']
-    df['st1_lb'] = st1['lowerband']
-    df['st1_ub'] = st1['upperband']
-    df['st2_signal'] = st2['trend']
-    df['st2_lb'] = st2['lowerband']
-    df['st2_ub'] = st2['upperband']
+    df[f'supertrend_{length}_{multiplier}'] = supertrend
+    df[f'upperband_{length}_{multiplier}'] = final_upperband
+    df[f'lowerband_{length}_{multiplier}'] = final_lowerband
     return df
 
-def enter_trade(side, price, sl):
-    st.session_state.current_position = side
-    st.session_state.entry_price = price
-    st.session_state.stop_loss = sl
-    log(f"🟢 ENTER {side} @ {price:.2f}, SL: {sl:.2f}")
+# === TRADE FUNCTIONS ===
+def place_order(side):
+    print(f"\nPlacing {side} order")
+    params = {
+        "symbol": SYMBOL,
+        "side": side,
+        "positionSide": "LONG" if side == "BUY" else "SHORT",
+        "type": "MARKET",
+        "quantity": QUANTITY,
+    }
+    res = signed_request("POST", "/openApi/swap/v2/trade/order", params)
+    print("Order response:", res)
+    return res
 
-def close_trade(price):
-    if st.session_state.current_position:
-        if st.session_state.current_position == 'LONG':
-            profit = price - st.session_state.entry_price
-        else:
-            profit = st.session_state.entry_price - price
-        log(f"🔴 EXIT {st.session_state.current_position} @ {price:.2f} | PnL: {profit:.2f} USDT")
-    st.session_state.current_position = None
-    st.session_state.entry_price = None
-    st.session_state.stop_loss = None
-
-def strategy():
-    df = get_latest_signals()
-    if df is None:
+def close_position():
+    global position
+    if not position:
+        print("No open position to close.")
         return
+    side = "SELL" if position == "LONG" else "BUY"
+    print(f"Manually closing {position} position")
+    place_order(side)
+    position = None
 
-    latest = df.iloc[-1]
-    st1_sig = latest['st1_signal']
-    st2_sig = latest['st2_signal']
-    price = latest['close']
+# === MAIN LOOP ===
+def run_bot():
+    global position, entry_price, stop_loss
+    df = fetch_klines(SYMBOL, INTERVAL)
+    df = calculate_supertrend(df, ST1_LEN, ST1_MUL)
+    df = calculate_supertrend(df, ST2_LEN, ST2_MUL)
 
-    current_position = st.session_state.current_position
-    stop_loss = st.session_state.stop_loss
-    wait_confirm_time = st.session_state.wait_confirm_time
-    waiting_side = st.session_state.waiting_side
+    st1 = df[f'supertrend_{ST1_LEN}_{ST1_MUL}'].iloc[-1]
+    st2 = df[f'supertrend_{ST2_LEN}_{ST2_MUL}'].iloc[-1]
 
-    if current_position:
-        if current_position == 'LONG' and price <= stop_loss:
-            log(f"❌ SL hit on LONG @ {price:.2f}")
-            close_trade(price)
-            return
-        if current_position == 'SHORT' and price >= stop_loss:
-            log(f"❌ SL hit on SHORT @ {price:.2f}")
-            close_trade(price)
-            return
-        if st1_sig != current_position or st2_sig != current_position:
-            log(f"⚠️ Signal flip detected — closing {current_position}")
-            close_trade(price)
-            return
+    print(f"ST1: {st1}, ST2: {st2}, Position: {position}")
 
-    now = datetime.now()
+    if not position:
+        prev_st1 = df[f'supertrend_{ST1_LEN}_{ST1_MUL}'].iloc[-2]
+        prev_st2 = df[f'supertrend_{ST2_LEN}_{ST2_MUL}'].iloc[-2]
 
-    if wait_confirm_time is None and st1_sig == st2_sig:
-        st.session_state.wait_confirm_time = now + timedelta(minutes=1)
-        st.session_state.waiting_side = st1_sig
-        log(f"⏳ Signal match: {st1_sig} — waiting 1 min confirmation...")
-        return
+        if st1 == st2 and st1 != prev_st1 and st2 != prev_st2:
+            side = "BUY" if st1 else "SELL"
+            order = place_order(side)
+            position = "LONG" if side == "BUY" else "SHORT"
+            entry_price = float(df['close'].iloc[-1])
+            stop_loss = df[f'lowerband_{ST2_LEN}_{ST2_MUL}'].iloc[-1] if position == "LONG" else df[f'upperband_{ST2_LEN}_{ST2_MUL}'].iloc[-1]
+            print(f"Entry: {entry_price}, Stop Loss: {stop_loss}")
 
-    if wait_confirm_time and now >= wait_confirm_time:
-        if st1_sig == waiting_side and st2_sig == waiting_side:
-            if waiting_side == 'BUY':
-                sl = latest['st2_lb']
-                enter_trade('LONG', price, sl)
-            elif waiting_side == 'SELL':
-                sl = latest['st2_ub']
-                enter_trade('SHORT', price, sl)
-        else:
-            log(f"❌ Signal mismatch after 1 min — skipping trade")
-        st.session_state.wait_confirm_time = None
-        st.session_state.waiting_side = None
+    elif position:
+        current_price = float(df['close'].iloc[-1])
+        if (position == "LONG" and (not st1 or not st2 or current_price < stop_loss)) or \
+           (position == "SHORT" and (st1 or st2 or current_price > stop_loss)):
+            print("Exit conditions met")
+            close_position()
 
-# === STREAMLIT APP ===
-st.title("📈 Supertrend BingX Trading Bot")
-
-if st.button("Run Strategy Once"):
-    strategy()
-
-st.markdown("### Live Log")
-for entry in st.session_state.log_messages[:30]:
-    st.text(entry)
-
-st.markdown("---")
-st.markdown("*Note: This demo does not place real orders. You can integrate BingX API for live trading.*")
+if __name__ == "__main__":
+    while True:
+        run_bot()
+        for _ in range(3):
+            print("Type 'exit' to close trade manually or wait...")
+            cmd = input()
+            if cmd.strip().lower() == 'exit':
+                close_position()
+                break
+        time.sleep(60)  # 1-minute cycle
