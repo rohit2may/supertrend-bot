@@ -1,6 +1,7 @@
 import streamlit as st
 st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 
+# Now import everything else
 import pandas as pd
 import requests
 import time
