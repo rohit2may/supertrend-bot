@@ -5,8 +5,8 @@ from hashlib import sha256
 import pandas as pd
 
 APIURL = "https://open-api.bingx.com"
-APIKEY = ""      # Put your API Key here
-SECRETKEY = ""   # Put your Secret Key here
+APIKEY = "v2vM7VlkudtLlLNM34xn3iCJkp0gby6FIRsun0Y2XQMuclU5QTRPCDESZxizWWZuNUwL696hRK7A5jCxq1Bqw"      # Put your API Key here
+SECRETKEY = "gLXVl29xpQbU22XTePuam3dcTHyWblpel8NkmqAkFAVO2sSQyNmWzMdpQhpxZABeGv1wZJ6nc6N0mKnmwUA"   # Put your Secret Key here
 
 def parse_params(params):
     sorted_keys = sorted(params)
