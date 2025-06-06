@@ -1,5 +1,5 @@
 import streamlit as st
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")  # ✅ Must come first
+st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 
 import pandas as pd
 import requests
@@ -8,12 +8,7 @@ from datetime import datetime, timedelta
 import hmac
 from hashlib import sha256
 
-# === CONFIG ===
-SYMBOL = "ethusdt"
-INTERVAL = "1m"
-TRADE_AMOUNT_USDT = 10
-LEVERAGE = 10
-API_URL = "https://open-api.bingx.com"
+# Streamlit inputs must come AFTER set_page_config
 API_KEY = st.text_input("API Key", type="password")
 SECRET_KEY = st.text_input("Secret Key", type="password")
 
