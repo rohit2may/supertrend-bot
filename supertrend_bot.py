@@ -1,5 +1,5 @@
 import streamlit as st
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
+st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")  # ✅ Must come first
 
 import pandas as pd
 import requests
