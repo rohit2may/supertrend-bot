@@ -1,7 +1,9 @@
 import streamlit as st
+
+# ✅ Page config — this must be FIRST and ONLY call
 st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 
-# Now import everything else
+# ⬇️ Now all other imports and code
 import pandas as pd
 import requests
 import time
@@ -166,7 +168,6 @@ def strategy():
         waiting_side = None
 
 # === STREAMLIT DASHBOARD ===
-st.set_page_config(page_title="Supertrend Trading Bot", layout="wide")
 st.title("📈 Supertrend BingX Trading Bot")
 
 if st.button("Run Strategy Once"):
@@ -177,4 +178,4 @@ for entry in log_messages[:30]:
     st.text(entry)
 
 st.markdown("---")
-st.markdown("*Note: This demo does not place real orders. You can integrate BingX API for live trading.*")
+st.markdown("*Note: This demo does not place real orders. You can integrate BingX API for live trading.*"
